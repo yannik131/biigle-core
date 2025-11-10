@@ -1,9 +1,12 @@
 <script>
 import AnnotationsStore from '../stores/annotations.js';
+import Events from '@/core/events.js';
 import Keyboard from '@/core/keyboard.js';
 import LabelbotWorker from '../workers/labelbot.js?worker';
 import LabelbotWorkerUrl from '../workers/labelbot.js?worker&url';
 import Messages from '@/core/messages/store.js';
+import { clamp } from '../utils.js';
+import { makeBlob } from '../makeBlobFromCanvas.js';
 
 // DINOv2 image input size.
 const INPUT_SIZE = 224;
@@ -154,9 +157,89 @@ export default {
 
             return [minX, minY, width, height];
         },
-        generateFeatureVector(points) {
-            const box = this.getBoundingBox(points);
+        calculateRectangleIntersection(r1, r2) {
+            const [x1, y1, w1, h1] = r1;
+            const [x2, y2, w2, h2] = r2;
+
+            const left   = Math.max(x1, x2);
+            const top    = Math.max(y1, y2);
+            const right  = Math.min(x1 + w1, x2 + w2);
+            const bottom = Math.min(y1 + h1, y2 + h2);
+
+            return [left, top, Math.max(0, right - left), Math.max(0, bottom - top)];
+        },
+        async toggleAnnotationLayerVisibility(show) {
+            // TODO Turn layer names into constants
+            const annotationLayer = this.map.getLayers().getArray().find(l => l.get('name') === "annotations");
+
+            await new Promise(resolve => {
+                annotationLayer.setVisible(show);
+                this.map.once('rendercomplete', resolve);
+                this.map.renderSync();
+            });
+        },
+        async drawTiledImageSectionIntoContext(ctx, box) {
+            // Relative to the original image
             const [x, y, width, height] = box;
+                
+            // Hide annotations for the screenshot
+            this.toggleAnnotationLayerVisibility(false);
+            
+            // Make screenshot of the current map
+            // The resolution of blobImage will depend on the device
+            const mapCanvas = this.map.getViewport().querySelector('.ol-layer canvas, canvas.ol-layer');
+            const blob = await makeBlob(mapCanvas); 
+            const blobImage = await createImageBitmap(blob);
+
+            //window.open(URL.createObjectURL(blob), "_blank");
+            
+            // Image coordinates of the top left and bottom right corner shown in the map
+            let [topLeftX, topLeftY] = this.map.getCoordinateFromPixel([0, 0]);
+            topLeftX = clamp(topLeftX, 0, this.image.width);
+            topLeftY = this.image.height - clamp(topLeftY, 0, this.image.height);
+            
+            const mapSize = this.map.getSize(); 
+            let [bottomRightX, bottomRightY] = this.map.getCoordinateFromPixel(mapSize);
+            bottomRightX = clamp(bottomRightX, 0, this.image.width);
+            bottomRightY = this.image.height - clamp(bottomRightY, 0, this.image.height);
+            
+            // Ratio between the size of the map screenshot and the actual size of the image section shown 
+            // in the map, should be equal for both width and height
+            const scale = blobImage.width / (bottomRightX - topLeftX);
+            
+            // x, y, width, height were relative to original image coordinates
+            // Subtract topLeft to make them relative to the screenshot
+            // Multiply with the ratio screenshot:actual for scaling
+            let relX = (x - topLeftX) * scale;
+            let relY = (y - topLeftY) * scale;
+            let relWidth = width * scale;
+            let relHeight = height * scale;
+            
+            // TODO Formatter?
+            [relX, relY, relWidth, relHeight] = this.calculateRectangleIntersection(
+                [relX, relY, relWidth, relHeight], [0, 0, blobImage.width, blobImage.height]);
+                
+            // TODO Messages.danger(errorMessage) somewhere? I just get "the server didn't respond"
+            if(relWidth === 0 || relHeight === 0)
+                throw 'Annotation was outside of the image';
+            
+            // Draw the rectangular selection of the screenshot into the labelbot canvas
+            ctx.drawImage(blobImage, relX, relY, relWidth, relHeight, 0, 0, INPUT_SIZE, INPUT_SIZE);
+
+            this.tempLabelbotCanvas.toBlob(blob => {
+                window.open(URL.createObjectURL(blob), '_blank');
+            }, "image/png");
+            
+            // Show annotations again
+            this.toggleAnnotationLayerVisibility(true);
+        },
+        drawNormalImageSectionIntoContext(ctx, box)
+        {
+            const [x, y, width, height] = box;
+            ctx.drawImage(this.image.source, x, y, width, height, 0, 0, INPUT_SIZE, INPUT_SIZE);
+        },
+        async generateFeatureVector(points) {
+            const box = this.getBoundingBox(points);
 
             // Create a temporary canvas for processing the selected region
             if (!this.tempLabelbotCanvas) {
@@ -168,10 +251,13 @@ export default {
                 });
             }
             const ctx = this.tempLabelbotCanvasCtx;
-
             ctx.clearRect(0, 0, INPUT_SIZE, INPUT_SIZE);
-            ctx.drawImage(this.image.source, x, y, width, height, 0, 0, INPUT_SIZE, INPUT_SIZE);
 
+            if(this.image?.tiled)
+                await this.drawTiledImageSectionIntoContext(ctx, box); 
+            else 
+                this.drawNormalImageSectionIntoContext(ctx, box);
+            
             const annotationData = ctx.getImageData(0, 0, INPUT_SIZE, INPUT_SIZE).data;
 
             const promise = this.addLabelbotWorkerListener(
@@ -295,6 +381,9 @@ export default {
         }
 
         this.labelbotMaxRequests = biigle.$require('labelbot.max_requests');
+        
+        Events.on('videos.map.init', map => this.map = map);
+        Events.on('annotations.map.init', map => this.map = map);
     },
 };
 </script>

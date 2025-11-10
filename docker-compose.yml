@@ -66,6 +66,7 @@ services:
   # The database
   database:
     image: ghcr.io/biigle/pgvector
+    platform: linux/amd64
     volumes:
       - dbdata:/var/lib/postgresql/data
       - ./:/data

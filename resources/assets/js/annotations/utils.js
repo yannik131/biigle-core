@@ -26,4 +26,15 @@ let isInvalidShape = function (feature) {
     }
 };
 
-export {isInvalidShape};
+/**
+ * Clamps a value in an inclusive interval
+ * @param value The value to clamp
+ * @param min Lower bound
+ * @param max Upper bound
+ * @returns Lower or upper bound if the value is outside of the bounds, otherwise just the value
+ */
+function clamp(value, min, max) {
+    return Math.max(min, Math.min(max, value));
+}
+
+export {isInvalidShape, clamp};

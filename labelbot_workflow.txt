@@ -1,0 +1,22 @@
+- Button "LabelBOT" in labels.blade.php is clicked
+- Triggers toggleLabelBot() in labelsTab.vue 
+    - this.handleLabelbotOn()
+    - $emit("update-labelbot-state", LABELBOT_STATES.READY)
+- triggers v-on:update-labelbot-state in labels.blade.php
+- calls mixins/labelbot.vue:updateLabelbotState()
+    - triggers recomputation of mixins/labelbot.vue:labelbotIsActive()
+    - triggers initLabelbotWorker() as a watcher, which sets labelbotstate to LABELBOT_STATES.READY
+    
+The user makes a new annotation 
+- show.blade.php: annotation-canvas v-on:new="handleNewAnnotation"
+- annotations/annotatorContainer.vue:handleNewAnnotation 
+    - calls storeLabelbotAnnotation if labelbot is active (as Labelbot mixin)
+- mixins/labelbot.vue:storeLabelbotAnnotation
+    - call mixins/labelbot.vue:generateFeatureVector
+        - Creates a new canvas: tempLabelbotCanvas 
+        ------- TODO: Don't use image.source for tiled images -------
+        - calls drawImage on the context of that canvas, using image.source 
+        -------------------------------------------------------------
+        - Adds a listener and posts a run message, handled in workers/labelbot.js
+        - The worker answers with the data and the bounding box of the selection
+- mixins/labelbot.vue:storeLabelbotAnnotation takes the result from generateFeatureVector, creates a new annotation and displays the popup

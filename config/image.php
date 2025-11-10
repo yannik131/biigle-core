@@ -11,7 +11,7 @@ return [
         |
         | Set to INF to disable tiling.
         */
-        'threshold' => env('IMAGE_TILES_THRESHOLD', 1E+4),
+        'threshold' => env('IMAGE_TILES_THRESHOLD', 3000),
 
         /*
          | Directory to temporarily store the tiles when they are generated.
