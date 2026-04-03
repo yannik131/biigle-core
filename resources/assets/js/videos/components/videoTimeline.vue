@@ -33,6 +33,7 @@
             :videoUuid="videoUuid"
             :has-error="hasError"
             :collapsed="collapsed"
+            :full-height="fullHeight"
             @seek="emitSeek"
             @select="emitSelect"
             @deselect="emitDeselect"
@@ -46,7 +47,8 @@
 import CurrentTime from './currentTime.vue';
 import ScrollStrip from './scrollStrip.vue';
 import TrackHeaders from './trackHeaders.vue';
-import { computed } from 'vue'
+
+const UNLABELED = Symbol();
 
 export default {
     emits: [
@@ -129,16 +131,24 @@ export default {
             hoverTime: 0,
             watchForCrossedFrame: false,
             nextAnnotationStartFrame: 0,
-        };
-    },
-    provide() {
-        return {
-            fullHeight: computed(() => this.fullHeight),
+            annotationTracks: [],
+            annotationStartFrames: [],
         };
     },
     computed: {
+        // In contrast to the properties that are updated based on the annotation revision
+        // (see below), the labelMap can be a computed property because the labels do not
+        // change frequently and watching their reactive properties is not expensive.
         labelMap() {
-            let map = {};
+            // Non-breaking space (NBSP) for empty labels to prevent div from collapsing
+            let map = {
+                [UNLABELED]: {
+                    id: UNLABELED,
+                    name: 'label pending',
+                    color: '5bc0de',
+                    pending: true,
+                }
+            };
             let annotations = this.annotations;
 
             if (this.pendingAnnotation) {
@@ -156,33 +166,6 @@ export default {
 
             return map;
         },
-        annotationTracks() {
-            let map = {};
-            let annotations = this.annotations;
-
-            if (this.pendingAnnotation) {
-                annotations = annotations.slice();
-                annotations.push(this.pendingAnnotation);
-            }
-
-            annotations.forEach(function (annotation) {
-                annotation.labels.forEach(function (label) {
-                    if (!map.hasOwnProperty(label.label_id)) {
-                        map[label.label_id] = [];
-                    }
-
-                    map[label.label_id].push(annotation);
-                });
-            });
-
-            return Object.keys(map).map((labelId) => {
-                return {
-                    id: labelId,
-                    label: this.labelMap[labelId],
-                    lanes: this.getAnnotationTrackLanes(map[labelId])
-                };
-            });
-        },
         styleObject() {
             if (this.heightOffset !== 0 && !this.fullHeight && !this.collapsed) {
                 return `height: calc(35% + ${this.heightOffset}px);`;
@@ -195,12 +178,61 @@ export default {
                 'full-height': this.fullHeight,
             };
         },
-        annotationStartFrames() {
-            return [...new Set(this.annotations.map(a => a.startFrame))]
-                .sort((a, b) => a - b);
+        annotationRevision() {
+            let revision = this.annotations.reduce((acc, ann) => acc + ann.revision, 0);
+            if (this.pendingAnnotation) {
+                revision += this.pendingAnnotation.revision;
+            }
+
+            return revision;
         },
     },
     methods: {
+        updateAnnotationTracks() {
+            // Unlabeled annotations for labelbot are grouped together
+            let map = {};
+            let annotations = this.annotations;
+
+            if (this.pendingAnnotation) {
+                annotations = annotations.slice();
+                annotations.push(this.pendingAnnotation);
+            }
+
+            annotations.forEach(function (annotation) {
+                if (annotation.labels.length === 0) {
+                    if (!map.hasOwnProperty(UNLABELED)) {
+                        map[UNLABELED] = [];
+                    }
+                    map[UNLABELED].push(annotation);
+                } else {
+                    annotation.labels.forEach(function (label) {
+                        if (!map.hasOwnProperty(label.label_id)) {
+                            map[label.label_id] = [];
+                        }
+
+                        map[label.label_id].push(annotation);
+                    });
+                }
+            });
+
+            // The UNLABELED symbol is not returned by Object.keys().
+            const keys = Object.keys(map);
+            if (map.hasOwnProperty(UNLABELED)) {
+                // LabelBOT pending annotations are always shown at the top.
+                keys.unshift(UNLABELED);
+            }
+            this.annotationTracks = keys.map((labelId) => {
+                return {
+                    id: labelId,
+                    label: this.labelMap[labelId],
+                    lanes: this.getAnnotationTrackLanes(map[labelId])
+                };
+            });
+        },
+        updateAnnotationStartFrames() {
+            this.annotationStartFrames = [...new Set(this.annotations.map(a => a.startFrame))]
+                .sort((a, b) => a - b);
+        },
         findNextAnnotationStartFrame(currentFrame) {
             currentFrame = this.roundTime(currentFrame > 0 ? currentFrame : this.currentTime);
 
@@ -307,8 +339,23 @@ export default {
         heightOffset() {
             this.$refs.scrollStrip.updateHeight();
         },
-        annotations() {
+        annotationRevision() {
+            // The annotation revision is an efficient way to watch all annotations for
+            // changes without having any expensive reactive watchers on arrays etc.
+            // That is why the below methods are not implemented as computed properties.
+            this.updateAnnotationTracks();
+            this.updateAnnotationStartFrames();
             this.findNextAnnotationStartFrame();
+        },
+        pendingAnnotation(newPending, oldPending) {
+            // The pending annotation is replaced on update and the revision would not
+            // change, so we have to add an extra watcher for this. This only has to be
+            // executed when the pending annotation is updated, i.e. not when the pending
+            // annotations is created or deleted (because the revision will change in
+            // this case).
+            if (newPending && oldPending) {
+                this.updateAnnotationTracks();
+            }
         },
     },
     created() {

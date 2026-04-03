@@ -2,25 +2,40 @@ import Messages from '@/core/messages/store.js';
 import VideoAnnotationApi from '../api/videoAnnotations.js';
 import {getRoundToPrecision} from '../utils.js';
 import {interpolate} from 'polymorph-js';
-import {ref} from 'vue';
+import {ref, watch} from 'vue';
 
 let SHAPE_CACHE;
+let PENDING_ID_COUNTER = 0;
 
 export default class Annotation {
     constructor(args) {
-        this.id = args.id;
+        // With LabelBOT, multiple pending annotations could be created, so they need
+        // unique IDs (that don't clash with the database IDs).
+        this.id = args.id || 'pending-' + PENDING_ID_COUNTER++;
         this._frames = ref(args.frames);
         this._points = args.points;
         this.video_id = args.video_id;
         this.shape_id = args.shape_id;
         this.created_at = args.created_at;
         this.updated_at = args.updated_at;
+        this.screenshotPromise = args.screenshotPromise;
         this._labels = ref(args.labels);
+        this.labelBOTLabels = args.labelBOTLabels;
 
         this._pending = ref(args.pending || false);
         this._selected = ref(false);
         this._revision = ref(1);
         this._tracking = ref(false);
+
+        // The startFrame and endFrame are used for overlapsTime(). This is used each time
+        // for all annotations whenever an annotation is updated, to determine the timeline
+        // annotation tracks. If we just take the refs from this.frames naively, this triggers
+        // a huge cascade of Vue getters and produces a significant lag starting with a couple
+        // of thousand annotations. The watcher eliminates this inefficiency.
+        watch(this._revision, () => {
+            this.startFrame = this.frames[0];
+            this.endFrame = this.frames[this.frames.length - 1];
+        }, { immediate: true });
     }
 
     get pending() {
@@ -64,7 +79,9 @@ export default class Annotation {
     }
 
     get color() {
-        return this.labels?.[0].label.color;
+        // The annotation could have no color if it is created with LabelBOT. Use the
+        // info color in this case.
+        return this.labels?.[0]?.label.color || '5bc0de';
     }
 
     get frames() {
@@ -73,14 +90,6 @@ export default class Annotation {
 
     set frames(value) {
         this._frames.value = value;
-    }
-
-    get startFrame() {
-        return this.frames[0];
-    }
-
-    get endFrame() {
-        return this.frames[this.frames.length - 1];
     }
 
     get interpolationPoints() {

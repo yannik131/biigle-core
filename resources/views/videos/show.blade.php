@@ -59,6 +59,8 @@
     biigle.$declare('videos.videoFileUri', '{!! url('api/v1/videos/:id/file') !!}');
     @can('addAnnotation', $video)
         biigle.$declare('videos.labelTrees', {!! $labelTrees !!});
+        biigle.$declare('videos.projectIds', {{$projectIds}});
+        biigle.$declare('labelbot.onnxUrl', '{{config('labelbot.onnx_url')}}');
     @endcan
     biigle.$declare('annotations.shapes', {!! $shapes !!});
     biigle.$declare('annotations.sessions', {!!$annotationSessions!!});
